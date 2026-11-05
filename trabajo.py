@@ -7,10 +7,9 @@ from google import genai
 app = Flask(__name__)
 CORS(app) 
 
-# Usamos /tmp para evitar el error de base de datos de solo lectura en Render
+# Usamos /tmp para que Render nos deje escribir
 DB_FILE = "/tmp/sistema_registro.db"
 
-# Configuración de la IA
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if API_KEY:
     cliente_ia = genai.Client(api_key=API_KEY)
@@ -21,7 +20,7 @@ def inicializar_base_datos():
     conexion = sqlite3.connect(DB_FILE)
     cursor = conexion.cursor()
     
-    # Tabla de usuarios con fecha_registro
+    # IMPORTANTE: Aquí se crea la columna fecha_registro
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             cedula TEXT PRIMARY KEY, 
@@ -35,7 +34,6 @@ def inicializar_base_datos():
         )
     """)
     
-    # Tabla de Administradores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin (
             usuario TEXT PRIMARY KEY, 
@@ -85,7 +83,6 @@ def procesar():
     
     try:
         if accion == 'guardar':
-            # Guardamos la fecha automáticamente
             sql = """INSERT INTO usuarios (cedula, nombre1, nombre2, apellido1, apellido2, telefono, direccion, fecha_registro) 
                      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))"""
             valores = (cedula, datos['nombre1'], datos['nombre2'], datos['apellido1'], datos['apellido2'], datos['telefono'], datos['direccion'])
@@ -140,7 +137,6 @@ def exportar():
     lista_usuarios = [dict(fila) for fila in resultados]
     return jsonify({"exito": True, "datos": lista_usuarios})
 
-# RUTA PARA LA TABLA ORDENADA POR APELLIDO
 @app.route('/lista_usuarios', methods=['GET'])
 def lista_usuarios():
     conexion = obtener_conexion()
@@ -187,8 +183,12 @@ def agente_ia():
     except Exception as e:
         return jsonify({"respuesta": f"Error en la IA: {str(e)}"})
 
-# Crear tablas al arrancar (Gunicorn)
+# 🔥 ESTO ES CLAVE: Crear tablas al arrancar para que Gunicorn las detecte
 inicializar_base_datos()
+
+if __name__ == '__main__':
+    puerto = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=puerto)
 
 if __name__ == '__main__':
     puerto = int(os.environ.get('PORT', 5000))
