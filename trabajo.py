@@ -5,29 +5,21 @@ import os
 from google import genai
 
 app = Flask(__name__)
-# Permitimos que InfinityFree se conecte
 CORS(app) 
 
-# ⚠️ IMPORTANTE: Usamos /tmp porque Render no permite escribir en la carpeta principal
 DB_FILE = "/tmp/sistema_registro.db"
 
-# --- CONFIGURACIÓN DE LA IA ---
-# Lee la clave desde las variables de entorno de Render
 API_KEY = os.getenv("GOOGLE_API_KEY")
-
-# Solo inicializamos la IA si la clave existe
 if API_KEY:
     cliente_ia = genai.Client(api_key=API_KEY)
 else:
     cliente_ia = None
-    print("⚠️ ADVERTENCIA: No se encontró GOOGLE_API_KEY. La IA no funcionará.")
-
 
 def inicializar_base_datos():
     conexion = sqlite3.connect(DB_FILE)
     cursor = conexion.cursor()
     
-    # 1. Tabla de usuarios
+    # Agregamos la columna fecha_registro con un valor por defecto
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             cedula TEXT PRIMARY KEY, 
@@ -36,11 +28,11 @@ def inicializar_base_datos():
             apellido1 TEXT NOT NULL, 
             apellido2 TEXT, 
             telefono TEXT, 
-            direccion TEXT
+            direccion TEXT,
+            fecha_registro TEXT
         )
     """)
     
-    # 2. Tabla de Administradores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin (
             usuario TEXT PRIMARY KEY, 
@@ -48,7 +40,6 @@ def inicializar_base_datos():
         )
     """)
     
-    # 3. Insertar admin por defecto (admin / 1234)
     try:
         cursor.execute("INSERT INTO admin (usuario, password) VALUES ('admin', '1234')")
     except sqlite3.IntegrityError:
@@ -61,9 +52,6 @@ def obtener_conexion():
     conexion = sqlite3.connect(DB_FILE)
     conexion.row_factory = sqlite3.Row 
     return conexion
-
-
-# --- RUTAS DEL SISTEMA ---
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -82,7 +70,6 @@ def login():
     else:
         return jsonify({"exito": False, "mensaje": "Usuario o contraseña incorrectos"})
 
-
 @app.route('/procesar', methods=['POST'])
 def procesar():
     datos = request.json
@@ -95,8 +82,9 @@ def procesar():
     
     try:
         if accion == 'guardar':
-            sql = """INSERT INTO usuarios (cedula, nombre1, nombre2, apellido1, apellido2, telefono, direccion) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?)"""
+            # Guardamos la fecha y hora actual usando SQLite
+            sql = """INSERT INTO usuarios (cedula, nombre1, nombre2, apellido1, apellido2, telefono, direccion, fecha_registro) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))"""
             valores = (cedula, datos['nombre1'], datos['nombre2'], datos['apellido1'], datos['apellido2'], datos['telefono'], datos['direccion'])
             cursor.execute(sql, valores)
             conexion.commit()
@@ -138,8 +126,6 @@ def procesar():
         
     return jsonify(respuesta)
 
-
-# --- RUTA PARA EXPORTAR A EXCEL ---
 @app.route('/exportar', methods=['GET'])
 def exportar():
     conexion = obtener_conexion()
@@ -147,56 +133,44 @@ def exportar():
     cursor.execute("SELECT * FROM usuarios")
     resultados = cursor.fetchall()
     conexion.close()
-    
     lista_usuarios = [dict(fila) for fila in resultados]
     return jsonify({"exito": True, "datos": lista_usuarios})
 
+# --- NUEVA RUTA: LISTA DE USUARIOS ORDENADA ---
+@app.route('/lista_usuarios', methods=['GET'])
+def lista_usuarios():
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    # ORDER BY apellido1 ASC los ordena alfabéticamente por el primer apellido
+    cursor.execute("SELECT * FROM usuarios ORDER BY apellido1 ASC")
+    resultados = cursor.fetchall()
+    conexion.close()
+    lista_usuarios = [dict(fila) for fila in resultados]
+    return jsonify({"exito": True, "datos": lista_usuarios})
 
-# --- RUTA PARA EL AGENTE DE IA ---
 @app.route('/agente_ia', methods=['POST'])
 def agente_ia():
     if not cliente_ia:
-         return jsonify({"respuesta": "Error: El agente de IA no está configurado en el servidor (Falta la API Key)."})
-
+         return jsonify({"respuesta": "Error: El agente de IA no está configurado."})
     datos = request.json
     pregunta = datos.get('pregunta')
-    
     if not pregunta:
         return jsonify({"respuesta": "Por favor, haz una pregunta."})
-
     conexion = obtener_conexion()
     cursor = conexion.cursor()
     cursor.execute("SELECT cedula, nombre1, apellido1, telefono FROM usuarios")
     resultados = cursor.fetchall()
     conexion.close()
-    
     lista_usuarios = [dict(fila) for fila in resultados]
-    
-    if not lista_usuarios:
-        contexto_datos = "La base de datos está vacía. No hay usuarios registrados."
-    else:
-        contexto_datos = f"Usuarios registrados: {lista_usuarios}"
-    
-    prompt = f"""
-    Eres un asistente virtual para un sistema de registro.
-    Datos de la base de datos: {contexto_datos}
-    Instrucciones: Responde de forma clara y concisa. Si no está en la lista, di que no existe.
-    Pregunta: {pregunta}
-    """
-    
+    contexto_datos = f"Usuarios registrados: {lista_usuarios}" if lista_usuarios else "La base de datos está vacía."
+    prompt = f"Eres un asistente virtual para un sistema de registro. Datos: {contexto_datos}. Responde claro y conciso. Pregunta: {pregunta}"
     try:
-        respuesta_ia = cliente_ia.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
+        respuesta_ia = cliente_ia.models.generate_content(model='gemini-2.5-flash', contents=prompt)
         return jsonify({"respuesta": respuesta_ia.text})
     except Exception as e:
         return jsonify({"respuesta": f"Error en la IA: {str(e)}"})
 
-
-# --- ARRANQUE DEL SERVIDOR ---
-
-# 🔥 ESTO ES CLAVE: Llamamos a la función AQUÍ (fuera del if) para que Gunicorn en Render cree las tablas
+# 🔥 IMPORTANTE: Crear tablas al arrancar
 inicializar_base_datos()
 
 if __name__ == '__main__':
