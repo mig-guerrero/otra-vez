@@ -157,8 +157,11 @@ def agente_ia():
         return jsonify({"respuesta": respuesta_ia.text})
     except Exception as e:
         return jsonify({"respuesta": f"Error en la IA: {str(e)}"})
+# ... (todo tu código de las rutas de arriba) ...
+
+# Llamamos a la función aquí, en el ámbito global, para que Gunicorn la ejecute al arrancar
+inicializar_base_datos()
 
 if __name__ == '__main__':
-    inicializar_base_datos()
     puerto = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=puerto)
