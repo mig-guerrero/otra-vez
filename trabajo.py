@@ -7,8 +7,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 # Reemplaza 'http://tudominio.epizy.com' con la URL real de tu frontend
-CORS(app, resources={r"/*": {"origins": ["http://tudominio.epizy.com"]}})
-
+CORS(app) 
 DB_FILE = "sistema_registro.db"
 
 # --- CONFIGURACIÓN DE LA IA ---
