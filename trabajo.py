@@ -3,38 +3,52 @@ from flask_cors import CORS
 import sqlite3
 import os
 from google import genai
-from flask_cors import CORS
 
 app = Flask(__name__)
-# Reemplaza 'http://tudominio.epizy.com' con la URL real de tu frontend
+# Permitimos que InfinityFree se conecte
 CORS(app) 
+
+# ⚠️ IMPORTANTE: Usamos /tmp porque Render no permite escribir en la carpeta principal
 DB_FILE = "/tmp/sistema_registro.db"
 
 # --- CONFIGURACIÓN DE LA IA ---
-# ⚠️ PEGA AQUÍ TU API KEY (Puede empezar con AQ. o AIza)
-API_KEY = "" 
-cliente_ia = genai.Client(api_key=API_KEY) 
+# Lee la clave desde las variables de entorno de Render
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# Solo inicializamos la IA si la clave existe
+if API_KEY:
+    cliente_ia = genai.Client(api_key=API_KEY)
+else:
+    cliente_ia = None
+    print("⚠️ ADVERTENCIA: No se encontró GOOGLE_API_KEY. La IA no funcionará.")
+
 
 def inicializar_base_datos():
     conexion = sqlite3.connect(DB_FILE)
     cursor = conexion.cursor()
     
-    # Tabla de usuarios
+    # 1. Tabla de usuarios
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
-            cedula TEXT PRIMARY KEY, nombre1 TEXT NOT NULL, nombre2 TEXT,
-            apellido1 TEXT NOT NULL, apellido2 TEXT, telefono TEXT, direccion TEXT
+            cedula TEXT PRIMARY KEY, 
+            nombre1 TEXT NOT NULL, 
+            nombre2 TEXT,
+            apellido1 TEXT NOT NULL, 
+            apellido2 TEXT, 
+            telefono TEXT, 
+            direccion TEXT
         )
     """)
     
-    # Tabla de Administradores
+    # 2. Tabla de Administradores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin (
-            usuario TEXT PRIMARY KEY, password TEXT NOT NULL
+            usuario TEXT PRIMARY KEY, 
+            password TEXT NOT NULL
         )
     """)
     
-    # Usuario admin por defecto
+    # 3. Insertar admin por defecto (admin / 1234)
     try:
         cursor.execute("INSERT INTO admin (usuario, password) VALUES ('admin', '1234')")
     except sqlite3.IntegrityError:
@@ -47,6 +61,9 @@ def obtener_conexion():
     conexion = sqlite3.connect(DB_FILE)
     conexion.row_factory = sqlite3.Row 
     return conexion
+
+
+# --- RUTAS DEL SISTEMA ---
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -64,6 +81,7 @@ def login():
         return jsonify({"exito": True, "mensaje": "Bienvenido"})
     else:
         return jsonify({"exito": False, "mensaje": "Usuario o contraseña incorrectos"})
+
 
 @app.route('/procesar', methods=['POST'])
 def procesar():
@@ -120,8 +138,26 @@ def procesar():
         
     return jsonify(respuesta)
 
+
+# --- RUTA PARA EXPORTAR A EXCEL ---
+@app.route('/exportar', methods=['GET'])
+def exportar():
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM usuarios")
+    resultados = cursor.fetchall()
+    conexion.close()
+    
+    lista_usuarios = [dict(fila) for fila in resultados]
+    return jsonify({"exito": True, "datos": lista_usuarios})
+
+
+# --- RUTA PARA EL AGENTE DE IA ---
 @app.route('/agente_ia', methods=['POST'])
 def agente_ia():
+    if not cliente_ia:
+         return jsonify({"respuesta": "Error: El agente de IA no está configurado en el servidor (Falta la API Key)."})
+
     datos = request.json
     pregunta = datos.get('pregunta')
     
@@ -149,7 +185,6 @@ def agente_ia():
     """
     
     try:
-        # Llamada al modelo usando la nueva sintaxis
         respuesta_ia = cliente_ia.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt
@@ -157,9 +192,11 @@ def agente_ia():
         return jsonify({"respuesta": respuesta_ia.text})
     except Exception as e:
         return jsonify({"respuesta": f"Error en la IA: {str(e)}"})
-# ... (todo tu código de las rutas de arriba) ...
 
-# Llamamos a la función aquí, en el ámbito global, para que Gunicorn la ejecute al arrancar
+
+# --- ARRANQUE DEL SERVIDOR ---
+
+# 🔥 ESTO ES CLAVE: Llamamos a la función AQUÍ (fuera del if) para que Gunicorn en Render cree las tablas
 inicializar_base_datos()
 
 if __name__ == '__main__':
